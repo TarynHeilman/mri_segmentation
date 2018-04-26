@@ -45,7 +45,7 @@ def parse():
     parser.add_argument(
       '--path-to-data',
       help = 'Where the data is stored',
-      default = '/Users/taryn/projects/mri_segmentation/data/')
+      default = '/Users/taryn/projects/mri_segmentation/data')
 
     parser.add_argument(
       '--plotname',
