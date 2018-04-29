@@ -30,10 +30,6 @@ class Pipeline(object):
         :param contour_file: str, path to contour file
         :return: None or np array
         '''
-        # add image and contour paths to list
-        self.image_paths.append(img_file)
-        self.contour_paths.append(contour_file)
-
         dct = parse_dicom_file(img_file)
         coords = parse_contour_file(contour_file)
         img = dct['pixel_data']
@@ -41,8 +37,13 @@ class Pipeline(object):
         mask = poly_to_mask(coords, *img.shape)
 
         # formulate file name, make sure directories exist, etc.
-        folder, typ, ext = contour_file.split('/')[-3:]
-        subdir = '{}/{}'.format(self.maskdir, folder)
+        source, typ, ext = contour_file.split('/')[-3:]
+        # should use some kind of recursion here..
+        sourcedir = subdir = '{}/{}'.format(self.maskdir, source)
+        if not os.path.exists(sourcedir):
+            os.mkdir(subdir)
+
+        subdir = '{}/{}'.format(sourcedir, typ)
         if not os.path.exists(subdir):
             os.mkdir(subdir)
 
@@ -51,7 +52,12 @@ class Pipeline(object):
         np.save(fname, mask)
 
         # add target path to list
-        self.target_paths.append(fname)
+        if typ[0] == 'i':
+            self.i_mask_paths.append(fname)
+        elif typ[0] == 'o':
+            self.o_mask_paths.append(fname)
+        else:
+            return('Unexpected file path')
 
     def create_masks(self):
         '''
@@ -63,10 +69,12 @@ class Pipeline(object):
         linked_files = pd.read_csv('{}/link.csv'.format(self.datadir))
 
         # instantiate lists of paths - store on class for help at runtime
-        self.image_paths, self.contour_paths, self.target_paths = [], [], []
+        # keep lists separate for i and o images for ease of analysis
+        self.i_image_paths, self.o_image_paths, self.i_mask_paths, self.o_mask_paths = [], [], [], []
 
         # loop over subdirectories
         for img, orig in linked_files.itertuples(index=False):
+            # get list of all files in these directories
             img_files = glob.glob(self.datadir+'/dicoms/'+img+'/*.dcm')
 
             # get number to match with contour files
@@ -74,13 +82,21 @@ class Pipeline(object):
 
             for num, img_file in zip(img_nums, img_files):
                 # format (possible) corresponding contour file
-                cfile = '{}/contourfiles/{}/i-contours/IM-0001-{}-icontour-manual.txt'.format(
+                i_cfile, o_cfile = ('{0}/contourfiles/{1}/{2}-contours/IM-0001-{3}-{2}contour-manual.txt'.format(
                     self.datadir,
                     orig,
-                    str(num).zfill(4))
+                    ctype,
+                    str(num).zfill(4)) for ctype in ('i', 'o'))
 
-                if os.path.isfile(cfile):
-                    self.process_one_mask(img_file, cfile)
+                if os.path.isfile(i_cfile):
+                    self.process_one_mask(img_file, i_cfile)
+                    # add image paths to list
+                    self.i_image_paths.append(img_file)
+
+                if os.path.isfile(o_cfile):
+                    self.process_one_mask(img_file, o_cfile)
+                    # add image paths to list
+                    self.o_image_paths.append(img_file)
 
     def read_batch_arrays(self, X_files, Y_files):
         '''
