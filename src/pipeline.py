@@ -18,17 +18,93 @@ class Pipeline(object):
         self.verbose = verbose
         self.batch_size = batch_size
 
+        self.read_links()
+
         if self.verbose:
             print('computing target masks...')
         self.create_masks()
+
+    def read_links(self):
+        '''
+        helper function, called in init, stores links (dict) on the class
+        '''
+        # read in link.csv
+        linked_files = pd.read_csv('{}/link.csv'.format(self.datadir))
+
+        self.links = {a : b for a, b in linked_files.itertuples(index = False)}
+
+    def format_impaths(self, source, num):
+        '''
+        helper function to format image filepaths from the given source and number
+
+        :param source: str
+        :param num: int
+
+        return: impath (str)
+        '''
+        return '{}/dicoms/{}/{}.dcm'.format(self.datadir, source, num)
+
+    def format_maskpaths(self, orig, typ, num):
+        '''
+        helper function to format mask filepaths from the given origination and number.
+        masks are named with the same convention as images
+        makes directories if required
+
+        :param orig: str
+        :param typ: str (i or o)
+        :param num: int
+
+        return: maskpath (str)
+        '''
+        subdir = '{}/{}/{}-contours'.format(self.maskdir, orig, typ)
+        if not os.path.exists(subdir):
+            os.makedirs(subdir)
+
+        return '{}/{}.npy'.format(subdir, num)
+
+    def format_contourpaths(self, orig, typ, num):
+        '''
+        helper function to format contour filepaths from the given origination and number
+
+        :param orig: str
+        :param typ: str (i or o)
+        :param num: int
+
+        return: maskpath (str)
+        '''
+        return '{0}/contourfiles/{1}/{2}-contours/IM-0001-{3}-{2}contour-manual.txt'.format(
+                self.datadir,
+                orig,
+                typ,
+                str(num).zfill(4))
+
+    def generate_image_tuples(self):
+        '''
+        helper function, loops over all image directories and returns a list of \
+        tuples referencing unique identifiers
+
+        :return: img_tups (list)
+        '''
+        img_tups = []
+        # just need patient images in this case
+        for img in self.links:
+            # get list of all files in these directories
+            img_files = glob.glob(self.datadir+'/dicoms/'+img+'/*.dcm')
+
+            # get number to match with contour files
+            img_nums = [int(file.split('/')[-1][:-4]) for file in img_files]
+
+            img_tups.append((img, img_nums))
+
+        return img_tups
 
     def process_one_mask(self, img_file, contour_file):
         '''
         creates one boolean mask
 
-        :param img_file: str, path to image file
+        :param img_num: str, path to image file
         :param contour_file: str, path to contour file
-        :return: None or np array
+        :return: mask (np array)
         '''
         dct = parse_dicom_file(img_file)
         coords = parse_contour_file(contour_file)
@@ -36,28 +112,7 @@ class Pipeline(object):
 
         mask = poly_to_mask(coords, *img.shape)
 
-        # formulate file name, make sure directories exist, etc.
-        source, typ, ext = contour_file.split('/')[-3:]
-        # should use some kind of recursion here..
-        sourcedir = subdir = '{}/{}'.format(self.maskdir, source)
-        if not os.path.exists(sourcedir):
-            os.mkdir(subdir)
-
-        subdir = '{}/{}'.format(sourcedir, typ)
-        if not os.path.exists(subdir):
-            os.mkdir(subdir)
-
-        # save as .npy for quick access
-        fname = '{}/{}.npy'.format(subdir, ext.split('.')[0])
-        np.save(fname, mask)
-
-        # add target path to list
-        if typ[0] == 'i':
-            self.i_mask_paths.append(fname)
-        elif typ[0] == 'o':
-            self.o_mask_paths.append(fname)
-        else:
-            return('Unexpected file path')
+        return mask
 
     def create_masks(self):
         '''
@@ -65,38 +120,29 @@ class Pipeline(object):
 
         :return: None
         '''
-        # read in link.csv
-        linked_files = pd.read_csv('{}/link.csv'.format(self.datadir))
+        # store tuples with origination/source and image # on class for easier access
+        self.image_tuples, self.mask_tuples = [], []
 
-        # instantiate lists of paths - store on class for help at runtime
-        # keep lists separate for i and o images for ease of analysis
-        self.i_image_paths, self.o_image_paths, self.i_mask_paths, self.o_mask_paths = [], [], [], []
+        img_tups = self.generate_image_tuples()
 
-        # loop over subdirectories
-        for img, orig in linked_files.itertuples(index=False):
-            # get list of all files in these directories
-            img_files = glob.glob(self.datadir+'/dicoms/'+img+'/*.dcm')
+        for pat, num in img_tups:
+            # get matching origination
+            orig = self.links[pat]
 
-            # get number to match with contour files
-            img_nums = [int(file.split('/')[-1][:-4]) for file in img_files]
+            # format (possible) corresponding contour files
+            cfiles = [self.format_contourpaths(orig, typ, num) for typ in ('i', 'o')]
 
-            for num, img_file in zip(img_nums, img_files):
-                # format (possible) corresponding contour file
-                i_cfile, o_cfile = ('{0}/contourfiles/{1}/{2}-contours/IM-0001-{3}-{2}contour-manual.txt'.format(
-                    self.datadir,
-                    orig,
-                    ctype,
-                    str(num).zfill(4)) for ctype in ('i', 'o'))
+            # only process when both inner and outer exist
+            if os.path.isfile(cfiles[0]) and os.path.isfile(cfiles[1]):
 
-                if os.path.isfile(i_cfile):
-                    self.process_one_mask(img_file, i_cfile)
-                    # add image paths to list
-                    self.i_image_paths.append(img_file)
+                for cfil, typ in zip(cfiles, ('i', 'o')):
+                    mask = self.process_one_mask(img_file, cfil)
+                    fname = self.format_maskpaths(orig, typ, num)
+                    np.save(fname, imask)
 
-                if os.path.isfile(o_cfile):
-                    self.process_one_mask(img_file, o_cfile)
-                    # add image paths to list
-                    self.o_image_paths.append(img_file)
+                # add identifiers to list
+                self.image_tuples.append((pat, num))
+                self.mask_tuples.append((orig, num))
 
     def read_batch_arrays(self, X_files, Y_files):
         '''
@@ -130,7 +176,6 @@ class Pipeline(object):
 
             # at this point, the data are going into some model that I am not privy to
             # some_model_training(X, Y)
-
 
 
 def parse():
