@@ -94,7 +94,8 @@ class Pipeline(object):
             # get number to match with contour files
             img_nums = [int(file.split('/')[-1][:-4]) for file in img_files]
 
-            img_tups.append((img, img_nums))
+            for num in img_nums:
+                img_tups.append((img, num))
 
         return img_tups
 
@@ -122,12 +123,13 @@ class Pipeline(object):
         '''
         # store tuples with origination/source and image # on class for easier access
         self.image_tuples, self.mask_tuples = [], []
-
         img_tups = self.generate_image_tuples()
 
         for pat, num in img_tups:
             # get matching origination
             orig = self.links[pat]
+            # format image name
+            img_file = self.format_impaths(pat, num)
 
             # format (possible) corresponding contour files
             cfiles = [self.format_contourpaths(orig, typ, num) for typ in ('i', 'o')]
@@ -138,7 +140,7 @@ class Pipeline(object):
                 for cfil, typ in zip(cfiles, ('i', 'o')):
                     mask = self.process_one_mask(img_file, cfil)
                     fname = self.format_maskpaths(orig, typ, num)
-                    np.save(fname, imask)
+                    np.save(fname, mask)
 
                 # add identifiers to list
                 self.image_tuples.append((pat, num))
@@ -199,4 +201,3 @@ if __name__ == "__main__":
     datadir = args[0].path_to_data
 
     pipeline = Pipeline(datadir)
-    print(pipeline.target_paths)
